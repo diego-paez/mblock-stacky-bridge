@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "stackchan": {
+      "command": "stackchan-mcp",
+      "args": []
+    },
+    "stacky-hub": {
+      "command": "/Users/diego_ai/github/stablock/mblock-stacky-bridge/.venv/bin/python",
+      "args": ["-m", "stacky_hub"],
+      "cwd": "/Users/diego_ai/github/stablock/mblock-stacky-bridge/hub"
+    }
+  }
+}

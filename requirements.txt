@@ -1,0 +1,9 @@
+# PC-side tools. Install: uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -r requirements.txt
+pyserial>=3.5      # USB serial to CyberPi (CH340)
+bleak>=0.22        # BLE scanning/probing from the Mac (Makeblock BLE, later Stack-chan BLE)
+mpremote           # generic MicroPython REPL tool (to test whether CyberPi exposes a raw REPL)
+esptool            # read chip info / back up CyberPi flash before any experiment
+# Makeblock's official libraries, kept as protocol reference; they auto-connect on import, so our code does not import them
+cyberpi==0.0.7
+makeblock==0.1.8
+mbot2==0.0.2
