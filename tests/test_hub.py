@@ -26,19 +26,19 @@ def test_move_rejects_unknown_direction():
         C.move("up", 40, 1)
 
 
-@pytest.mark.parametrize("pos,deg", [("up", 120), ("down", 40), ("home", 90), (200, 120), (0, 40)])
+@pytest.mark.parametrize("pos,deg", [("up", 115), ("down", 45), ("home", 90), (200, 115), (0, 45)])
 def test_arm(pos, deg):
     assert C.arm(pos)[0] == f"arm {deg}"
 
 
-@pytest.mark.parametrize("pos,deg", [("open", 120), ("close", 45), ("closed", 45), (10, 45), (500, 120)])
+@pytest.mark.parametrize("pos,deg", [("open", 115), ("close", 50), ("closed", 50), (10, 50), (500, 115)])
 def test_gripper(pos, deg):
     assert C.gripper(pos)[0] == f"grip {deg}"
 
 
 def test_program_normalizes_and_limits():
     text, _ = C.program("forward 200 9; wait 1; arm up; gripper close")
-    assert text == "prog fwd 100 5; wait 1; arm 120; grip 45"
+    assert text == "prog fwd 100 5; wait 1; arm 115; grip 50"
     with pytest.raises(C.CommandError):
         C.program("; ".join(["forward 50 5"] * 7))            # 35 s
     with pytest.raises(C.CommandError):
@@ -151,7 +151,7 @@ def test_e2e_read_sensors(pair):
         await link.close()
         return s
     s = asyncio.run(go())
-    assert s["dist"] == "300" and s["arm"] == "120" and s["locked"] == "0"
+    assert s["dist"] == "300" and s["arm"] == "100" and s["locked"] == "0"
 
 
 # ---------- v1.1 end-to-end: explorer -> LinkRobot -> MbotLink -> F3 -> runtime physics ----------

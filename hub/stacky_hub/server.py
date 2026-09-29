@@ -91,7 +91,7 @@ async def mbot_set_led(r: int, g: int, b: int, index: str = "all") -> str:
 
 @mcp.tool()
 async def mbot_arm(position: str) -> str:
-    """Move the arm (servo S4): 'up' (120°), 'down' (40°), 'home' (90°) or an angle 40-120. Moves smoothly."""
+    """Move the arm (servo S4): 'up' (115°), 'down' (45°), 'home' (90°) or an angle 45-115. Moves smoothly."""
     try:
         text, note = C.arm(position)
     except C.CommandError as e:
@@ -101,7 +101,7 @@ async def mbot_arm(position: str) -> str:
 
 @mcp.tool()
 async def mbot_gripper(position: str) -> str:
-    """Open/close the gripper (servo S3): 'open' (120°), 'close' (45°), 'home' (90°) or an angle 45-120."""
+    """Open/close the gripper (servo S3): 'open' (115°), 'close' (50°), 'home' (90°) or an angle 50-115."""
     try:
         text, note = C.gripper(position)
     except C.CommandError as e:

@@ -1,39 +1,43 @@
-# Stacky runtime v1.1: runs ON the mBot2 CyberPi (mBlock 5 -> Python -> Upload mode).
+# Stacky runtime v1.2: runs ON the mBot2 CyberPi (mBlock 5 -> Python -> Upload mode).
 # Receives Stacky protocol v1 commands from Stack-chan (or the Mac hub) over BLE/USB
 # and executes them SAFELY. Spec: docs/protocol.md
 #
 # Safety, enforced here regardless of what the sender asks:
 #   - speeds clamped to MAX_RPM, every motion ends after <= MAX_MOVE_S
-#   - arm S4 in [40,120], gripper S3 in [45,120], servos glide at SERVO_DEG_PER_S
+#   - arm S4 in [45,115], gripper S3 in [50,115] (5 deg inside the hardware range), servos glide
+#     at SERVO_DEG_PER_S and never move at start-up
 #   - forward motion stops below OBSTACLE_CM
 #   - watchdog: moving/programs stop if the host goes silent for WATCHDOG_S
 #   - button B = emergency stop + lock, button A = unlock
 #   - v1.1 exploration primitives (straight <cm>, turn <deg>) are closed-loop HERE,
 #     on encoders and gyro, so link/LLM delays cannot change how far the robot goes
+#   - v1.2 teleop (drive <cm/s> <deg/s> <lease_ms>) stops by itself when the lease runs out
 import cyberpi
 import mbot2
 import mbuild
 import time
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 # ---- Safety limits (mirror of docs/protocol.md; checked by tests/test_limits.py) ----
 MAX_RPM = 60
 MAX_MOVE_S = 5.0
 MAX_PROG_S = 30.0
 MAX_PROG_STEPS = 20
-ARM_MIN = 40
-ARM_MAX = 120
+ARM_MIN = 45
+ARM_MAX = 115
 ARM_HOME = 90
-GRIP_MIN = 45
-GRIP_MAX = 120
+GRIP_MIN = 50
+GRIP_MAX = 115
 GRIP_HOME = 90
-SERVO_DEG_PER_S = 90
+SERVO_DEG_PER_S = 40
 OBSTACLE_CM = 10
 WATCHDOG_S = 3.0
 HB_PERIOD_S = 1.0
 MAX_STEP_CM = 30
 MAX_TURN_DEG = 180
+MAX_DRIVE_LEASE_MS = 500
+MAX_DRIVE_DEG_S = 90
 ODOM_MIN_MS = 100
 
 # ---- Calibration (verify with scripts/calibrate_mbot.py, then edit here) ----
@@ -53,7 +57,8 @@ ARM_PRESETS = {"up": ARM_MAX, "down": ARM_MIN, "home": ARM_HOME}
 GRIP_PRESETS = {"open": GRIP_MAX, "close": GRIP_MIN, "home": GRIP_HOME}
 MOVES = ("fwd", "back", "left", "right")
 CLOSED = ("straight", "turn")
-SERVO_STEP_MS = 33
+DRIVE = "drive"
+SERVO_STEP_MS = 25
 SERVO_STEP_DEG = max(1, int(SERVO_DEG_PER_S * SERVO_STEP_MS / 1000))
 
 
@@ -88,15 +93,26 @@ program = None      # dict(steps, idx, id, wait_until, started)
 servo = {}          # port -> [current, target]
 
 
+SERVO_RANGE = {}    # port -> (lo, hi): every servo_set is clamped to this, whatever asked for it
+
+
 def servo_init(port, home, lo, hi):
+    """Remember where the servo probably is, WITHOUT moving it.
+
+    servo_get() reads 0 on a servo that has not been driven since power-on. Believing it
+    made the old start-up glide send the arm to ~3 deg: it crashed down, stalled, and the
+    stall current reset the robot. Now only an in-range reading is trusted, and nothing
+    moves until the host sends a servo command.
+    """
+    SERVO_RANGE[port] = (lo, hi)
     cur = home
     try:
         g = float(mbot2.servo_get(port))
-        if 0 <= g <= 180:
+        if lo <= g <= hi:
             cur = int(g)
     except Exception:
         pass
-    servo[port] = [cur, home]  # glide from wherever it is to home
+    servo[port] = [cur, cur]   # no start-up motion
 
 
 # ---- Encoders and gyro ----
@@ -218,6 +234,17 @@ def parse_step(tokens):
         pct = clamp(num(a[0] if a else None, 40), 0, 100)
         sec = clamp(num(a[1] if len(a) > 1 else None, 1.0), 0.1, MAX_MOVE_S)
         return cmd, (pct, sec), sec
+    if cmd == DRIVE:
+        # v1.2 teleop, the ROS cmd_vel shape: forward speed and turn rate (+ = left, CCW)
+        v = num(a[0] if a else None)
+        w = num(a[1] if len(a) > 1 else None, 0.0)
+        if v is None or w is None:
+            raise ValueError("drive_args")
+        vmax = MAX_RPM * 6 * WHEEL_CM_PER_DEG
+        v = clamp(v, -vmax, vmax)
+        w = clamp(w, -MAX_DRIVE_DEG_S, MAX_DRIVE_DEG_S)
+        lease = clamp(num(a[2] if len(a) > 2 else None, MAX_DRIVE_LEASE_MS), 50, MAX_DRIVE_LEASE_MS)
+        return cmd, (v, w, lease), lease / 1000.0
     if cmd == "wait":
         sec = clamp(num(a[0] if a else None, 0.5), 0.0, MAX_MOVE_S)
         return cmd, (sec,), sec
@@ -258,6 +285,17 @@ def parse_step(tokens):
     raise ValueError("unknown_cmd")
 
 
+def drive_rpm(v, w):
+    """Wheel rpm (left, right; + = forward) for v cm/s and w deg/s, scaled to MAX_RPM."""
+    half = w / 57.2958 * TRACK_CM / 2.0
+    cm_s_per_rpm = 6 * WHEEL_CM_PER_DEG
+    l, r = (v - half) / cm_s_per_rpm, (v + half) / cm_s_per_rpm
+    m = max(abs(l), abs(r))
+    if m > MAX_RPM:                  # keep the curve, lower the speed
+        l, r = l * MAX_RPM / m, r * MAX_RPM / m
+    return l, r
+
+
 def start_step(cmd, args, cid):
     """Execute one validated step. Motions are non-blocking; the main loop ends them."""
     global motion
@@ -284,6 +322,21 @@ def start_step(cmd, args, cid):
         if (cmd == "straight" and motion["w0"] is None) or (cmd == "turn" and motion["y0"] is None):
             motion["end"] = time.ticks_add(now(), int(timeout / 1.5 * 1000))   # no sensor: timed fallback
         mbot2.drive_speed(l, r)
+    elif cmd == DRIVE:
+        v, w, lease = args
+        if v > 0:
+            d = distance_cm()
+            if d is not None and d < OBSTACLE_CM:
+                v = 0.0              # blocked ahead: turning and backing away still work
+        l, r = drive_rpm(v, w)
+        end = time.ticks_add(now(), int(lease))
+        direction = "fwd" if v > 0 else "back" if v < 0 else ""
+        if motion is not None and motion["kind"] == DRIVE:
+            motion["end"], motion["dir"] = end, direction   # lease renewed; one done per session
+        else:
+            motion = {"kind": DRIVE, "dir": direction, "end": end, "id": cid,
+                      "w0": wheels_cm(), "y0": yaw_deg()}
+        mbot2.drive_speed(l, -r)
     elif cmd == "led":
         rgb, idx = args
         cyberpi.led.on(rgb[0], rgb[1], rgb[2], idx)
@@ -353,6 +406,8 @@ def handle(cid, tokens):
         try:
             for s in raw:
                 st = parse_step(s.split())
+                if st[0] == DRIVE:
+                    raise ValueError("drive_not_in_prog")
                 steps.append(st)
                 total += st[2]
         except ValueError as e:
@@ -373,7 +428,9 @@ def handle(cid, tokens):
     if c == "wait":
         ack(cid, False, "wait_only_in_prog")
         return
-    if c in MOVES or c in CLOSED:
+    if c == DRIVE and motion is not None and motion["kind"] == DRIVE and program is None:
+        pass                                # renewing the lease, keep the session
+    elif c in MOVES or c in CLOSED or c == DRIVE:
         if motion is not None:
             report_done(motion, "replaced")
         stop_all("replaced", silent=True)  # a new motion replaces the current one
@@ -470,7 +527,8 @@ def tick():
 
     # End of timed motion (or closed-loop timeout)
     if motion is not None and time.ticks_diff(motion["end"], now()) <= 0:
-        finish_motion("timeout" if motion["kind"] in CLOSED and motion.get("target") else "time")
+        k = motion["kind"]
+        finish_motion("lease" if k == DRIVE else "timeout" if k in CLOSED and motion.get("target") else "time")
 
     # Obstacle guard (forward only), checked every 100 ms
     if motion is not None and (motion["kind"] == "fwd" or motion.get("dir") == "fwd") \
@@ -485,12 +543,16 @@ def tick():
 
     # Servo glide
     if time.ticks_diff(now(), t["servo"]) >= SERVO_STEP_MS:
-        t["servo"] = now()
+        # fixed cadence, so the glide really runs at SERVO_DEG_PER_S (not slower when the loop is late)
+        late = time.ticks_diff(now(), t["servo"]) > 4 * SERVO_STEP_MS
+        t["servo"] = now() if late else time.ticks_add(t["servo"], SERVO_STEP_MS)
         for p in servo:
             cur, tgt = servo[p]
             if cur != tgt:
                 step = SERVO_STEP_DEG if tgt > cur else -SERVO_STEP_DEG
                 cur = tgt if abs(tgt - cur) <= SERVO_STEP_DEG else cur + step
+                lo, hi = SERVO_RANGE.get(p, (0, 180))
+                cur = int(clamp(cur, lo, hi))   # last line of defence before the motor
                 servo[p][0] = cur
                 mbot2.servo_set(cur, p)
 

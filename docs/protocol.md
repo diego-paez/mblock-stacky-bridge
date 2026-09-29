@@ -52,6 +52,7 @@ Every argument is **clamped on the mBot** to the limits below. The host (Stack-c
 | `straight` | `<cm> [speed%]` | **v1.1** drive straight *by distance*, closed-loop on the wheel encoders. cm −30..30 (− = backwards), speed default 30% |
 | `turn` | `<deg> [speed%]` | **v1.1** turn in place *by angle*, closed-loop on the gyro. deg −180..180, **+ = left (counter-clockwise)**, speed default 30% |
 | `odom` | `<period_ms>` | **v1.1** stream `odom` events every 100–5000 ms. 0 = off. Allowed while locked |
+| `drive` | `<v_cm_s> <w_deg_s> [lease_ms]` | **v1.2** teleop in the ROS `cmd_vel` shape: forward speed (cm/s, ± ≈20) and turn rate (deg/s, ±90, **+ = left**). The wheels keep going only until the lease runs out (≤ 500 ms), so the sender must renew it; a renewal keeps the same session and ends with one `done … lease`. Forward is refused (set to 0) while an obstacle is closer than `OBSTACLE_CM`. Not allowed in programs |
 | `sync` | `<host_ms>` | **v1.1** reply `sk_ack <id> ok <host_ms> <mbot_ms>`, used to measure round-trip time and clock offset. Allowed while locked |
 
 Mini-program steps: any `fwd/back/left/right/straight/turn/led/arm/grip/home` command, plus `wait <sec>`.
@@ -76,6 +77,7 @@ Every motion ends with exactly one `done`, even when it is interrupted. `dist` a
 | `obstacle` | forward motion stopped by the ultrasonic guard |
 | `cmd` / `button` / `watchdog` | stopped by `stop`, button B, or host silence |
 | `replaced` | a new motion command replaced it |
+| `lease` | **v1.2** a `drive` session ended because no renewal arrived in time |
 
 ## Exploration with delays (v1.1 design rule)
 
@@ -97,14 +99,16 @@ The heartbeat watchdog still applies: if the host dies mid-step, the mBot stops 
 | `MAX_MOVE_S` | 5.0 | a single motion never lasts longer |
 | `MAX_PROG_S` | 30.0 | a whole program |
 | `MAX_PROG_STEPS` | 20 | |
-| `ARM_MIN/MAX/HOME` (S4) | 40 / 120 / 90 | 40 = lowest, 120 = highest |
-| `GRIP_MIN/MAX/HOME` (S3) | 45 / 120 / 90 | 45 = closed, 120 = open |
-| `SERVO_DEG_PER_S` | 90 | servos glide in 3° steps every 33 ms; they never jump |
+| `ARM_MIN/MAX/HOME` (S4) | 45 / 115 / 90 | 5° inside the hardware range 40 (lowest) – 120 (highest) |
+| `GRIP_MIN/MAX/HOME` (S3) | 50 / 115 / 90 | 5° inside the hardware range 45 (closed) – 120 (open) |
+| `SERVO_DEG_PER_S` | 40 | servos glide in 1° steps every 25 ms; they never jump and never move at start-up |
 | `OBSTACLE_CM` | 10 | forward motion auto-stops below this (if an ultrasonic sensor is present) |
 | `WATCHDOG_S` | 3.0 | while anything moves, stop if no `sk_hb`/`sk` arrives for this long |
 | `HB_PERIOD_S` | 1.0 | host sends `sk_hb` every period while connected |
 | `MAX_STEP_CM` | 30 | v1.1: longest single `straight` |
 | `MAX_TURN_DEG` | 180 | v1.1: largest single `turn` |
+| `MAX_DRIVE_LEASE_MS` | 500 | v1.2: longest a `drive` runs without renewal |
+| `MAX_DRIVE_DEG_S` | 90 | v1.2: fastest `drive` turn rate |
 
 ## Local controls on the mBot (always win)
 

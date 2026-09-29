@@ -87,7 +87,7 @@ def load_runtime():
     mbot2.EM_get_angle = em_get_angle
     mbot2.EM_stop = lambda p: log.append(("em_stop",))
     mbot2.servo_set = lambda a, p: log.append(("servo", p, a))
-    mbot2.servo_get = lambda p: 120
+    mbot2.servo_get = lambda p: 100   # in range, so the runtime trusts it
 
     mbuild = types.ModuleType("mbuild")
     mbuild.distance = 300.0

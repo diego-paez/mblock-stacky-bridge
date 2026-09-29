@@ -30,7 +30,7 @@ still program the mBot in mBlock blocks.
 ## Safety (enforced on the mBot, and again on the host)
 
 - Speed ≤ 60 rpm (about 20 cm/s). Each motion ≤ 5 s. Programs ≤ 20 steps / 30 s.
-- Arm S4 40–120° (home 90). Gripper S3 45 (closed) – 120° (open) (home 90). Servos glide at 90°/s.
+- Arm S4 45–115° (home 90), gripper S3 50 (closed) – 115° (open) (home 90): 5° inside the hardware range. Servos glide at 40°/s and never move at start-up.
 - Forward motion stops below 10 cm. Watchdog stops everything 3 s after the host goes silent.
 - **Button B = emergency stop + lock**, button A = unlock. Only named commands are accepted: never code.
 
